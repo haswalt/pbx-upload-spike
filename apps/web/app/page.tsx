@@ -1,5 +1,9 @@
+import { debugToolsEnabled } from "@/lib/server/env";
 import { SpikeApp } from "./_components/spike-app";
 import styles from "./_components/spike.module.css";
+
+// Read SPIKE_DEBUG_TOOLS at request time, not build time.
+export const dynamic = "force-dynamic";
 
 export default function Home() {
   return (
@@ -11,7 +15,7 @@ export default function Home() {
           Azure Blob Storage. No file bytes pass through the Next.js server.
         </p>
       </header>
-      <SpikeApp />
+      <SpikeApp debugTools={debugToolsEnabled()} />
     </main>
   );
 }

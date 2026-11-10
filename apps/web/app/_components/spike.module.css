@@ -172,15 +172,6 @@
   opacity: 0.5;
 }
 
-.login {
-  max-width: 360px;
-}
-
-.login label {
-  display: grid;
-  gap: 4px;
-  font-size: 0.9rem;
-}
 
 @media (max-width: 640px) {
   .table thead {

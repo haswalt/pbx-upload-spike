@@ -3,7 +3,6 @@ import type {
   CompleteUploadResponse,
   CreateUploadRequest,
   CreateUploadResponse,
-  SessionInfo,
 } from "@/lib/contracts";
 
 export class ApiCallError extends Error {
@@ -31,10 +30,6 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  session: () => call<SessionInfo>("/api/session"),
-  login: (id: string, password: string) =>
-    call<SessionInfo>("/api/session", { method: "POST", body: JSON.stringify({ id, password }) }),
-  logout: () => call<{ ok: true }>("/api/session", { method: "DELETE" }),
   createUpload: (req: CreateUploadRequest, init?: RequestInit) =>
     call<CreateUploadResponse>("/api/uploads", { method: "POST", body: JSON.stringify(req), ...init }),
   complete: (uploadId: string) =>

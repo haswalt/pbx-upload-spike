@@ -1,5 +1,4 @@
 import "server-only";
-import type { Role } from "@/lib/contracts";
 
 /**
  * Server-side configuration. Read lazily so `next build` works without
@@ -29,43 +28,17 @@ export function storageConfig() {
   };
 }
 
-export function sessionSecret(): string {
-  const secret = required("SESSION_SECRET");
+/** HMAC key for upload receipts. RECEIPT_SECRET, falling back to the old SESSION_SECRET name. */
+export function receiptSecret(): string {
+  const secret = process.env.RECEIPT_SECRET?.trim() || process.env.SESSION_SECRET?.trim();
+  if (!secret) throw new ConfigError("Missing required env var RECEIPT_SECRET");
   if (secret.length < 32) {
-    throw new ConfigError("SESSION_SECRET must be at least 32 characters");
+    throw new ConfigError("RECEIPT_SECRET must be at least 32 characters");
   }
   return secret;
 }
 
-export interface SpikeUser {
-  id: string;
-  password: string;
-  role: Role;
-}
-
-/**
- * Documented test auth for the spike: SPIKE_USERS="alice:pw1:uploader,bob:pw2:viewer".
- * Replace with the real application identity mechanism before anything real.
- */
-export function spikeUsers(): SpikeUser[] {
-  const raw = process.env.SPIKE_USERS?.trim();
-  if (!raw) return [];
-  return raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const [id, password, role] = entry.split(":");
-      if (!id || !password || (role !== "uploader" && role !== "viewer")) {
-        throw new ConfigError(
-          "SPIKE_USERS entries must look like id:password:uploader|viewer",
-        );
-      }
-      return { id, password, role };
-    });
-}
-
-/** Enables the diagnostics panel and the debug TTL/size overrides. */
+/** Enables the debug TTL/size overrides used by the diagnostics panel. */
 export function debugToolsEnabled(): boolean {
   return process.env.SPIKE_DEBUG_TOOLS === "true";
 }

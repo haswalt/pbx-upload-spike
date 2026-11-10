@@ -7,7 +7,6 @@ import {
   type CreateUploadResponse,
   type UploadPolicy,
 } from "@/lib/contracts";
-import { getSession } from "@/lib/server/auth";
 import { debugToolsEnabled, issuanceRateLimit, storageConfig } from "@/lib/server/env";
 import { handleError, json, jsonError, sameOrigin } from "@/lib/server/http";
 import { takeToken } from "@/lib/server/rate-limit";
@@ -35,9 +34,6 @@ const EXTENSIONS: Record<string, string> = {
 export async function POST(req: Request) {
   if (!sameOrigin(req)) return jsonError(403, "bad_origin", "Cross-origin request rejected");
 
-  const session = await getSession().catch(() => null);
-  if (!session) return jsonError(401, "unauthenticated", "Sign in to request an upload URL");
-
   const body = (await req.json().catch(() => null)) as Partial<CreateUploadRequest> | null;
   if (!body || !isUploadType(body.uploadType)) {
     return jsonError(400, "invalid_upload_type", "uploadType must be one of: " + Object.keys(UPLOAD_POLICIES).join(", "));
@@ -47,9 +43,6 @@ export async function POST(req: Request) {
   }
 
   const policy: UploadPolicy = UPLOAD_POLICIES[body.uploadType];
-  if (!policy.allowedRoles.includes(session.role)) {
-    return jsonError(403, "forbidden", `Role '${session.role}' may not upload ${body.uploadType}s`);
-  }
 
   // Spike-only overrides used by the diagnostics panel (expired SAS, size bypass).
   const debug = debugToolsEnabled() ? body.debug : undefined;
@@ -60,7 +53,9 @@ export async function POST(req: Request) {
   const problem = checkHints(body.uploadType, body.size, contentType, maxBytes);
   if (problem) return jsonError(422, problem.code, problem.message);
 
-  if (!takeToken(`issue:${session.sub}`, issuanceRateLimit())) {
+  // No auth in this spike: the per-IP rate limit and same-origin check are the
+  // only brakes on issuance. Use Vercel Deployment Protection if exposed widely.
+  if (!takeToken(`issue:${clientIp(req)}`, issuanceRateLimit())) {
     return jsonError(429, "rate_limited", "Too many upload URLs requested; try again shortly");
   }
 
@@ -71,7 +66,6 @@ export async function POST(req: Request) {
     const { uploadUrl, expiresOn } = await issueBlobSas(containerName, blobName, ttlSeconds);
     const uploadId = issueReceipt({
       id,
-      sub: session.sub,
       type: body.uploadType,
       container: containerName,
       blob: blobName,
@@ -79,7 +73,7 @@ export async function POST(req: Request) {
     });
 
     // Log the issuance, never the URL.
-    console.info(`[uploads] issued id=${id} user=${session.sub} type=${body.uploadType} hintBytes=${body.size} ttl=${ttlSeconds}s`);
+    console.info(`[uploads] issued id=${id} type=${body.uploadType} hintBytes=${body.size} ttl=${ttlSeconds}s`);
 
     return json<CreateUploadResponse>(
       {
@@ -94,6 +88,10 @@ export async function POST(req: Request) {
   } catch (err) {
     return handleError("uploads", err);
   }
+}
+
+function clientIp(req: Request): string {
+  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "unknown";
 }
 
 function clamp(value: unknown, min: number, max: number): number | undefined {

@@ -46,7 +46,7 @@ shows it in the UI.
 ## Vercel
 
 1. Import the repo into Vercel and set **Root Directory** to `apps/web`. Vercel detects the framework (Next.js) and pnpm automatically.
-2. Add the environment variables from `apps/web/.env.example` for Production and Preview. Use a new `SESSION_SECRET` and new `SPIKE_USERS` passwords. Leave `SPIKE_DEBUG_TOOLS` unset in production.
+2. Add the environment variables from `apps/web/.env.example` for Production and Preview. Generate a new `RECEIPT_SECRET` (`openssl rand -base64 48`).
 3. Add the deployed origin to Blob CORS by re-running `setup.sh` with `ORIGINS`, or in the portal under *Storage account → Resource sharing (CORS) → Blob service*. Azure allows at most 5 CORS rules, and each preview URL is a separate origin. For previews, use a stable branch alias instead of listing every URL.
 
 ### Getting rid of the client secret (recommended next step)

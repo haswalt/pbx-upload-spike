@@ -1,14 +1,14 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { sessionSecret } from "./env";
+import { receiptSecret } from "./env";
 
 /**
  * Minimal HMAC-signed tokens: base64url(json).base64url(hmac).
- * `purpose` is mixed into the MAC so a session can't be replayed as a receipt.
+ * `purpose` is mixed into the MAC to keep token kinds separate.
  */
 
 function mac(purpose: string, body: string): Buffer {
-  return createHmac("sha256", sessionSecret())
+  return createHmac("sha256", receiptSecret())
     .update(`${purpose}\n${body}`)
     .digest();
 }

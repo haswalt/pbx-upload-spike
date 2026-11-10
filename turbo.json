@@ -34,7 +34,7 @@
       "persistent": true,
       "passThroughEnv": [
         "AZURE_*",
-        "SESSION_SECRET",
+        "RECEIPT_SECRET",
         "SPIKE_*"
       ]
     }

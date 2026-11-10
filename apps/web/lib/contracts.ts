@@ -9,8 +9,6 @@
 
 export const MiB = 1024 * 1024;
 
-export type Role = "uploader" | "viewer";
-
 export interface UploadPolicy {
   label: string;
   /** Allowed MIME types (hints only — not proof of format). */
@@ -20,7 +18,6 @@ export interface UploadPolicy {
   maxBytes: number;
   /** Lifetime of the issued SAS. Must cover the whole transfer for block uploads. */
   sasTtlSeconds: number;
-  allowedRoles: readonly Role[];
 }
 
 export const UPLOAD_POLICIES = {
@@ -36,7 +33,6 @@ export const UPLOAD_POLICIES = {
     accept: "image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif",
     maxBytes: 25 * MiB,
     sasTtlSeconds: 10 * 60,
-    allowedRoles: ["uploader"],
   },
   video: {
     label: "Video",
@@ -44,7 +40,6 @@ export const UPLOAD_POLICIES = {
     accept: "video/mp4,video/quicktime,video/webm,.mov",
     maxBytes: 2048 * MiB,
     sasTtlSeconds: 60 * 60,
-    allowedRoles: ["uploader"],
   },
 } as const satisfies Record<string, UploadPolicy>;
 
@@ -148,9 +143,4 @@ export interface CompleteUploadResponse {
 export interface ApiError {
   error: string;
   message: string;
-}
-
-export interface SessionInfo {
-  user: { id: string; role: Role } | null;
-  debugTools: boolean;
 }

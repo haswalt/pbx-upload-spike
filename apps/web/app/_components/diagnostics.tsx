@@ -92,20 +92,6 @@ const CHECKS: Check[] = [
     },
   },
   {
-    id: "unauth",
-    title: "Unauthenticated SAS issuance",
-    expected: "API 401",
-    run: async () => {
-      const res = await fetch("/api/uploads", {
-        method: "POST",
-        credentials: "omit",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(tinyPhoto()),
-      });
-      return { pass: res.status === 401, detail: `${res.status}` };
-    },
-  },
-  {
     id: "bad-type",
     title: "Unknown uploadType",
     expected: "API 400",

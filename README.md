@@ -24,14 +24,13 @@ Direct upload also gets around Vercel's ~4.5 MB request body limit for functions
 
 ```text
 apps/web/
-  app/api/session/                 test sign-in (cookie session)
   app/api/uploads/                 POST: authorise and mint SAS
   app/api/uploads/[id]/complete/   POST: HEAD blob, check real size
   app/api/uploads/[id]/            DELETE: owner cleanup
   app/api/health/                  liveness; ?deep=1 checks the Azure identity
   app/_components/                 uploader UI + diagnostics panel
   lib/contracts.ts                 shared types and upload policies
-  lib/server/                      env, auth, signed receipts, storage, rate limit
+  lib/server/                      env, signed receipts, storage, rate limit
   lib/client/                      fetch wrappers, browser Blob upload
 infra/
   setup.sh                         az CLI provisioning
@@ -52,18 +51,18 @@ pnpm install
 pnpm dev
 ```
 
-Then open http://localhost:3000, sign in as one of the `SPIKE_USERS`, and upload.
+Then open http://localhost:3000 and upload.
 
 ## How it works
 
 **`POST /api/uploads`**
-- Requires a signed session cookie (401 without one) and an allowed role per upload type (403 for `viewer`).
-- Rejects cross-origin requests (Origin check plus a `SameSite=Strict` cookie).
+- **No auth.** Anyone who can reach the site can request an upload URL. The same-origin check and a per-IP rate limit are the only brakes, so turn on Vercel Deployment Protection if the URL gets shared widely.
+- Rejects cross-origin requests (Origin header check).
 - Checks the `uploadType` allowlist. The browser's `size` and `contentType` are **hints**, so they only gate obviously bad requests (422).
-- Rate limit per user, in memory per instance. On serverless that's a speed bump; use Redis or a WAF for anything real.
+- Rate limit per IP, in memory per instance. On serverless that's a speed bump; use Redis or a WAF for anything real.
 - The blob name is generated server-side as `<type>/<uuid>.<ext>`. The extension comes from the allowlisted MIME type, never from the filename.
 - Mints a user delegation SAS (`sr=b`, `sp=cw`, `spr=https`, short TTL). The delegation key is cached for about 6 hours.
-- Returns `uploadId`, which is an HMAC-signed receipt `{blob, owner, maxBytes, exp}`. That lets `complete` work across serverless instances without a database.
+- Returns `uploadId`, which is an HMAC-signed receipt `{blob, maxBytes, exp}`. That lets `complete` work across serverless instances without a database.
 
 **Browser**
 - Checks size and type locally first for fast feedback.
@@ -73,7 +72,7 @@ Then open http://localhost:3000, sign in as one of the `SPIKE_USERS`, and upload
 - Shows the blob key and timings. The SAS URL is never shown or logged.
 
 **`POST /api/uploads/:id/complete`**
-- Checks the receipt and that the caller owns it, then reads blob properties. It never downloads content.
+- Checks the receipt signature, then reads blob properties. It never downloads content.
 - Missing blob: 404. Empty or larger than the limit: deletes the blob, then 422.
 - The stored `contentType` is client-supplied metadata, **not proof of format**. Nothing here certifies the file as safe.
 
@@ -90,8 +89,6 @@ The **Diagnostics** panel in the UI runs these from the browser. "Expired SAS" a
 | Client size check bypassed | complete → 422 `blob_too_large`, blob deleted | Diagnostics (debug) |
 | Expired SAS | Azure 403 | Diagnostics (debug) |
 | Blob path altered | Azure 403 | Diagnostics |
-| SAS issued without sign-in | API 401 | Diagnostics |
-| Viewer role asks for a SAS | API 403 | Sign in as the viewer user |
 | Blob URL without SAS | No anonymous read or write | Diagnostics, and `curl -i <blob-url>` |
 | Overwrite an existing blob | Azure 409 | Diagnostics |
 | complete before upload | 404 `blob_missing` | Diagnostics |
@@ -106,6 +103,6 @@ upload. The large `PUT` requests go to `<account>.blob.core.windows.net`.
 ## Not covered (deliberately)
 
 No content inspection, malware scanning, entity creation, processing, polling or
-WebSockets. CORS is not authentication. A short SAS expiry stops *new* requests;
-a request Azure has already accepted can still finish. Test auth
-(`SPIKE_USERS`) is a placeholder for the real application identity.
+WebSockets, and no user auth: anyone with the URL can upload. CORS is not
+authentication. A short SAS expiry stops *new* requests; a request Azure has
+already accepted can still finish. A real build must authenticate SAS issuance.

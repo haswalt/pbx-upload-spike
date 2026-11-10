@@ -6,13 +6,12 @@ import { sign, verify } from "./signing";
  * Stateless upload receipt. The `uploadId` handed to the browser IS this
  * signed token, so `complete`/`delete` can resolve it to the server-issued
  * blob name without a database (works across serverless instances).
+ * Holding the receipt is what authorises complete/delete for that one blob.
  */
 export interface UploadReceipt {
   v: 1;
   /** Random id, also the blob's file stem. */
   id: string;
-  /** Owner — only they can complete/delete. */
-  sub: string;
   type: UploadType;
   container: string;
   blob: string;
