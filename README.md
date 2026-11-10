@@ -8,6 +8,13 @@ the app server?
 The frontend and the small API are one **Next.js app** (`apps/web`). It deploys
 to **Vercel**, and Azure only provides Blob Storage plus an Entra identity.
 
+The original brief is in [docs/azure-direct-upload-spike.md](docs/azure-direct-upload-spike.md).
+This build deliberately differs from it in three ways:
+
+- **One Next.js app instead of a separate Fastify API.** The API lives in Next.js route handlers.
+- **Vercel instead of Container Apps.** The server reaches Azure through a service principal, not a managed identity.
+- **No auth on SAS issuance.** The brief asks for it; this spike relies on a same-origin check and a per-IP rate limit only.
+
 ```mermaid
 flowchart TD
   A[Browser] -->|POST /api/uploads| B[Next.js route handler on Vercel]
