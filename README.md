@@ -1,159 +1,111 @@
-# Turborepo starter
+# Azure direct-to-Blob upload spike
 
-This Turborepo starter is maintained by the Turborepo core team.
+The question this spike answers: can a Next.js browser app upload photos and
+videos **straight to Azure Blob Storage** using short-lived, single-blob,
+write-only **user delegation SAS** URLs, with no file bytes passing through
+the app server?
 
-## Using this example
+The frontend and the small API are one **Next.js app** (`apps/web`). It deploys
+to **Vercel**, and Azure only provides Blob Storage plus an Entra identity.
 
-Run the following command:
-
-```sh
-npx create-turbo@latest
+```mermaid
+flowchart TD
+  A[Browser] -->|POST /api/uploads| B[Next.js route handler on Vercel]
+  B -->|Entra service principal: get user delegation key| C[Azure Blob Storage]
+  B -->|uploadId receipt, blobKey, SAS URL| A
+  A -->|PUT bytes directly with SAS| C
+  A -->|POST /api/uploads/:id/complete| B
+  B -->|HEAD blob properties| C
 ```
 
-## What's inside?
+Direct upload also gets around Vercel's ~4.5 MB request body limit for functions. Large videos couldn't go through the server anyway.
 
-This Turborepo includes the following packages/apps:
+## Layout
 
-### Apps and Packages
-
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `@next/eslint-plugin-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
-
-### Build
-
-To build all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo build
+```text
+apps/web/
+  app/api/session/                 test sign-in (cookie session)
+  app/api/uploads/                 POST: authorise and mint SAS
+  app/api/uploads/[id]/complete/   POST: HEAD blob, check real size
+  app/api/uploads/[id]/            DELETE: owner cleanup
+  app/api/health/                  liveness; ?deep=1 checks the Azure identity
+  app/_components/                 uploader UI + diagnostics panel
+  lib/contracts.ts                 shared types and upload policies
+  lib/server/                      env, auth, signed receipts, storage, rate limit
+  lib/client/                      fetch wrappers, browser Blob upload
+infra/
+  setup.sh                         az CLI provisioning
+  README.md                        Azure settings, SAS scope, Vercel, delivery notes
 ```
 
-Without global `turbo`, use your package manager:
+## Running locally
 
-```sh
-cd my-turborepo
-npx turbo build
-pnpm exec turbo build
-pnpm exec turbo build
+1. Provision Azure (see [infra/README.md](infra/README.md)), or point at an existing account where your user has **Storage Blob Delegator** and **Storage Blob Data Contributor**.
+2. `cp apps/web/.env.example apps/web/.env.local` and fill it in. Locally you can leave `AZURE_CLIENT_*` empty and run `az login`.
+3. Start the dev server:
+
+```bash
+pnpm install
 ```
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo build --filter=docs
+```bash
+pnpm dev
 ```
 
-Without global `turbo`:
+Then open http://localhost:3000, sign in as one of the `SPIKE_USERS`, and upload.
 
-```sh
-npx turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-```
+## How it works
 
-### Develop
+**`POST /api/uploads`**
+- Requires a signed session cookie (401 without one) and an allowed role per upload type (403 for `viewer`).
+- Rejects cross-origin requests (Origin check plus a `SameSite=Strict` cookie).
+- Checks the `uploadType` allowlist. The browser's `size` and `contentType` are **hints**, so they only gate obviously bad requests (422).
+- Rate limit per user, in memory per instance. On serverless that's a speed bump; use Redis or a WAF for anything real.
+- The blob name is generated server-side as `<type>/<uuid>.<ext>`. The extension comes from the allowlisted MIME type, never from the filename.
+- Mints a user delegation SAS (`sr=b`, `sp=cw`, `spr=https`, short TTL). The delegation key is cached for about 6 hours.
+- Returns `uploadId`, which is an HMAC-signed receipt `{blob, owner, maxBytes, exp}`. That lets `complete` work across serverless instances without a database.
 
-To develop all apps and packages, run the following command:
+**Browser**
+- Checks size and type locally first for fast feedback.
+- Requests one SAS per file. Up to 3 files upload at once.
+- Uploads with `@azure/storage-blob` (`BlockBlobClient.uploadData`). Files up to 8 MiB go as a single Put Blob. Larger files go as parallel 8 MiB blocks plus Put Block List, with progress. `If-None-Match: *` blocks overwrites.
+- On a 403 from Azure (for example an expired SAS) it requests a fresh SAS and retries once automatically. There's also a manual retry button.
+- Shows the blob key and timings. The SAS URL is never shown or logged.
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+**`POST /api/uploads/:id/complete`**
+- Checks the receipt and that the caller owns it, then reads blob properties. It never downloads content.
+- Missing blob: 404. Empty or larger than the limit: deletes the blob, then 422.
+- The stored `contentType` is client-supplied metadata, **not proof of format**. Nothing here certifies the file as safe.
 
-```sh
-cd my-turborepo
-turbo dev
-```
+## Test matrix
 
-Without global `turbo`, use your package manager:
+The **Diagnostics** panel in the UI runs these from the browser. "Expired SAS" and "bypassed size check" need `SPIKE_DEBUG_TOOLS=true`, which allows a short TTL and a smaller size limit for test requests.
 
-```sh
-cd my-turborepo
-npx turbo dev
-pnpm exec turbo dev
-pnpm exec turbo dev
-```
+| Scenario | Expected | How |
+|---|---|---|
+| Valid small JPEG | 201, then complete → accepted | Uploader / Diagnostics |
+| Multiple photos | Independent progress and results | Uploader (select several) |
+| Large video | Block upload succeeds within the 60 min SAS | Uploader |
+| Oversized file picked in browser | Rejected immediately on the client | Uploader |
+| Client size check bypassed | complete → 422 `blob_too_large`, blob deleted | Diagnostics (debug) |
+| Expired SAS | Azure 403 | Diagnostics (debug) |
+| Blob path altered | Azure 403 | Diagnostics |
+| SAS issued without sign-in | API 401 | Diagnostics |
+| Viewer role asks for a SAS | API 403 | Sign in as the viewer user |
+| Blob URL without SAS | No anonymous read or write | Diagnostics, and `curl -i <blob-url>` |
+| Overwrite an existing blob | Azure 409 | Diagnostics |
+| complete before upload | 404 `blob_missing` | Diagnostics |
+| Same file requested twice | Different blob keys | Diagnostics |
+| SAS showing up in logs | Never logged; errors pass through `redact()` | Check Vercel function logs |
+| Upload from another origin | Blocked by CORS (browser only) | Try from an origin that isn't in the list |
 
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+To confirm no bytes go through the server, open DevTools → Network during an
+upload. The large `PUT` requests go to `<account>.blob.core.windows.net`.
+`/api/*` requests are a few hundred bytes each.
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
+## Not covered (deliberately)
 
-```sh
-turbo dev --filter=web
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-pnpm exec turbo login
-pnpm exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-pnpm exec turbo link
-pnpm exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+No content inspection, malware scanning, entity creation, processing, polling or
+WebSockets. CORS is not authentication. A short SAS expiry stops *new* requests;
+a request Azure has already accepted can still finish. Test auth
+(`SPIKE_USERS`) is a placeholder for the real application identity.
